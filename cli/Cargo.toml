@@ -1,0 +1,24 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# gRPC client
+tonic = "0.12"
+prost = "0.13"
+
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Shared types
+shared = { path = "../shared" }
+
+# Generated gRPC code
+kvstore-proto = { path = "../proto" }
+
+clap = { version = "4", features = ["derive", "env"] }

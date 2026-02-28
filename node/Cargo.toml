@@ -1,0 +1,24 @@
+[package]
+name = "node"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+
+# gRPC server
+tonic = "0.12"
+prost = "0.13"
+dashmap = "6"
+uuid = { version = "1", features = ["v4"] }
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Shared types
+shared = { path = "../shared" }
+kvstore-proto = { path = "../proto" }
+

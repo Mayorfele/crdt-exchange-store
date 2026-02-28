@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package kvstore;
+
+// The service definition — what operations the node exposes
+service KvStore {
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Set(SetRequest) returns (SetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Gossip(GossipRequest) returns (GossipResponse);
+}
+
+// GET
+message GetRequest {
+  string key = 1;
+}
+
+message GetResponse {
+  string value = 1;
+  bool found = 2;
+}
+
+// SET
+message SetRequest {
+  string key = 1;
+  string value = 2;
+}
+
+message SetResponse {
+  bool success = 1;
+}
+
+// DELETE
+message DeleteRequest {
+  string key = 1;
+}
+
+message DeleteResponse {
+  bool success = 1;
+}
+
+// GOSSIP — node to node sync
+message GossipRequest {
+  repeated GossipEntry entries = 1;
+}
+
+message GossipResponse {
+  repeated GossipEntry entries = 1;
+}
+
+message GossipEntry {
+  string key = 1;
+  string value = 2;
+  repeated uint64 vector_clock = 3;
+  string crdt_type = 4;
+}

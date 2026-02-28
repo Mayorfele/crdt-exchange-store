@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "node",
+    "cli",
+    "ingester",
+    "shared",
+    "proto",
+]
+resolver = "2"
