@@ -31,6 +31,9 @@ pub struct Config {
     // how often to gossip in seconds
     #[arg(long, env = "GOSSIP_INTERVAL", default_value = "2")]
     pub gossip_interval: u64,
+
+    #[arg(long, env = "METRICS_PORT", default_value = "9090")]
+    pub metrics_port: u16,
 }
 
 impl Config {

@@ -6,9 +6,11 @@ mod gossip;
 mod config;
 mod metrics;
 mod server;
+mod redis_store;
+mod pubsub;
 
-use std::sync::{Arc, Mutex};
-use std::fs;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use clap::Parser;
 use tonic::transport::Server;
 use tracing::info;
@@ -20,15 +22,16 @@ use crate::server::NodeService;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // ── Logging ──────────────────────────────────────────────
-    // reads LOG_LEVEL env var. defaults to "info"
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env()
             .add_directive("info".parse()?))
         .init();
 
-    // ── Config ───────────────────────────────────────────────
     let config = Config::parse();
+
+    metrics::init();
+    tokio::spawn(metrics::serve_metrics(config.metrics_port));
+    
     info!(
         "starting node {} on port {} with {} peers",
         config.node_id,
@@ -36,27 +39,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.peers().len()
     );
 
-    // ── Data directory ───────────────────────────────────────
-    // create the data dir if it doesn't exist yet
-    fs::create_dir_all(&config.data_dir)?;
+    let redis_url = std::env::var("REDIS_URL")
+        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
-    // ── Store ────────────────────────────────────────────────
-    // boot the store — loads snapshot + replays WAL
     let store = KvStore::new(
         config.node_id.clone(),
         config.node_index,
         config.num_nodes,
-        config.wal_path(),
-        config.snapshot_path(),
-    )?;
+        &redis_url,
+    ).await?;
 
-    // wrap in Arc<Mutex<>> so it can be shared across
-    // the gRPC server and the gossip background task
     let store = Arc::new(Mutex::new(store));
 
-    // ── Gossip background task ───────────────────────────────
-    // spawn gossip as a separate async task so it runs
-    // independently of the gRPC server
     let gossip_store = store.clone();
     let peers = config.peers();
     let gossip_interval = config.gossip_interval;
@@ -65,7 +59,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         gossip::run_gossip(gossip_store, peers, gossip_interval).await;
     });
 
-    // ── gRPC server ──────────────────────────────────────────
+    let pubsub_store = store.clone();
+    let pubsub_redis_url = redis_url.clone();
+
+    tokio::spawn(async move {
+        pubsub::run_subscriber(pubsub_store, pubsub_redis_url).await;
+    });
+
     let addr = format!("0.0.0.0:{}", config.port).parse()?;
     let service = NodeService { store };
 

@@ -32,6 +32,8 @@ pub struct Entry {
     pub crdt_type: CrdtType,
     pub clock: VectorClock,
     pub node_id: NodeId,  // which node last wrote this
+    pub source: String,  // ← add this line
+
 }
 
 // ── Entry values ─────────────────────────────────────────────
@@ -89,5 +91,14 @@ impl Rate {
 
     pub fn to_value(&self) -> String {
         self.value.to_string()
+    }
+}
+
+pub fn source_priority(source: &str) -> u8 {
+    match source {
+        "frankfurter" => 3,
+        "coincap"     => 2,
+        "manual"      => 1,
+        _             => 0,
     }
 }
