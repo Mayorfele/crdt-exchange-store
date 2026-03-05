@@ -19,7 +19,7 @@ impl RedisStore {
         Ok(self.pool.get().await?)
     }
 
-    // ── Get ──────────────────────────────────────────────────
+    
     pub async fn get(&self, key: &str) -> Result<Option<Entry>, Box<dyn std::error::Error>> {
         let mut conn = self.get_conn().await?;
 

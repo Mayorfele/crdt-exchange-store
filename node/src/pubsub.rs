@@ -29,7 +29,7 @@ async fn connect_and_listen(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = redis::Client::open(redis_url)?;
 
-    // use get_async_pubsub() — dedicated pubsub connection
+    
     let mut pubsub = client.get_async_pubsub().await?;
 
     pubsub.subscribe("rate-updates").await?;
