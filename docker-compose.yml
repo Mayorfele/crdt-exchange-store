@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+
+  node-a:
+    build: .
+    environment:
+      NODE_ID: node-a
+      NODE_INDEX: "0"
+      PORT: "7001"
+      NUM_NODES: "3"
+      PEERS: "node-b:node-b:7002,node-c:node-c:7003"
+      REDIS_URL: "redis://redis:6379"
+      GOSSIP_INTERVAL: "2"
+    ports:
+      - "7001:7001"
+      - "9091:9090"
+    depends_on:
+      - redis
+
+  node-b:
+    build: .
+    environment:
+      NODE_ID: node-b
+      NODE_INDEX: "1"
+      PORT: "7002"
+      NUM_NODES: "3"
+      PEERS: "node-a:node-a:7001,node-c:node-c:7003"
+      REDIS_URL: "redis://redis:6379"
+      GOSSIP_INTERVAL: "2"
+    ports:
+      - "7002:7002"
+      - "9092:9090"
+    depends_on:
+      - redis
+
+  node-c:
+    build: .
+    environment:
+      NODE_ID: node-c
+      NODE_INDEX: "2"
+      PORT: "7003"
+      NUM_NODES: "3"
+      PEERS: "node-a:node-a:7001,node-b:node-b:7002"
+      REDIS_URL: "redis://redis:6379"
+      GOSSIP_INTERVAL: "2"
+    ports:
+      - "7003:7003"
+      - "9093:9090"
+    depends_on:
+      - redis
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - node-a
+      - node-b
+      - node-c
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    depends_on:
+      - prometheus
+
+volumes:
+  redis-data:

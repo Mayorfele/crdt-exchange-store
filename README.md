@@ -6,17 +6,6 @@ Live exchange rates from [Frankfurter](https://frankfurter.app) flow continuousl
 
 ---
 
-## Why This Exists
-
-Most backend engineers know *how* to use Redis or Postgres. Fewer understand what those tools are actually doing under the hood; what guarantees they provide, where they fall short, and why distributed consistency is hard.
-
-I built this to close that gap for myself.
-
-Phase 1 implements every layer manually: gossip protocol, Write-Ahead Log, vector clocks, CRDT merge functions. Not because reinventing Redis is a good idea in production, but because building it yourself is the only way to truly understand what you're handing off when you do use Redis.
-
-Phase 2 (in progress) replaces the custom infrastructure layer with Redis while keeping the CRDT engine intact — demonstrating the engineering judgment to know *when* to build from scratch and *when* to reach for proven infrastructure.
-
----
 
 ## The Core Problem
 
@@ -28,36 +17,6 @@ This system handles it differently. Vector clocks detect that the writes were co
 
 ---
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                      Cluster                            │
-│                                                         │
-│   ┌──────────┐   gossip   ┌──────────┐                 │
-│   │  Node A  │◄──────────►│  Node B  │                 │
-│   │  :7001   │            │  :7002   │                 │
-│   └────┬─────┘            └────┬─────┘                 │
-│        │         gossip        │                       │
-│        └──────────┬────────────┘                       │
-│                   │                                     │
-│            ┌──────▼─────┐                              │
-│            │   Node C   │                              │
-│            │   :7003    │                              │
-│            └────────────┘                              │
-└─────────────────────────────────────────────────────────┘
-         ▲                    ▲
-         │                    │
-   ┌─────┴──────┐      ┌──────┴─────┐
-   │ Frankfurter│      │  CoinCap   │
-   │  Ingester  │      │  Ingester  │
-   └────────────┘      └────────────┘
-         ▲
-         │
-   ┌─────┴──────┐
-   │ kvstore-cli│
-   └────────────┘
-```
 
 **Every node runs the same binary** — launched three times with different config. There is no leader. Any node accepts reads and writes. Gossip handles the rest.
 
@@ -205,17 +164,6 @@ cargo run -p cli -- --node http://localhost:7003 get rates:fiat:USD/EUR
 - Full benchmark suite comparing consistency models
 
 ---
-
-## Limitations (Phase 1)
-
-This is an honest list. Phase 1 is built for understanding, not production load:
-
-- No authentication or TLS on gRPC connections
-- Gossip peer selection is naive (random, not topology-aware)
-- No automatic cluster membership — peers are configured statically
-- WAL replay on large datasets is slow without index
-- Node ID as LWW tiebreak is arbitrary — source priority is better
-
 These are known tradeoffs, not oversights. Phase 2 addresses them systematically.
 
 ---

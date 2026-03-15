@@ -1,5 +1,5 @@
-use shared::types::{Entry, EntryValue, VectorClock, NodeId};
-use crate::vector_clock::{compare, merge, ClockOrdering};
+use shared::types::{Entry, EntryValue, source_priority};
+use crate::vector_clock::{compare, merge};
 
 // ── The core merge function ───────────────────────────────────
 // Called when gossip detects two nodes have different values
@@ -83,5 +83,10 @@ fn merge_concurrent(local: &Entry, incoming: &Entry) -> Entry {
         crdt_type: local.crdt_type.clone(),
         clock: merged_clock,
         node_id: local.node_id.clone(),
+        source: if source_priority(&local.source) >= source_priority(&incoming.source) {
+        local.source.clone()
+    } else {
+        incoming.source.clone()
+    },
     }
 }

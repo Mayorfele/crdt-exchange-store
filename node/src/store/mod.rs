@@ -1,86 +1,50 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
-use dashmap::DashMap;
+use std::collections::HashMap;
 use shared::types::{Entry, Key, NodeId};
 use crate::vector_clock;
 use crate::crdt;
-use crate::wal::{Wal, WalOp};
-use crate::wal::snapshot::Snapshot;
+use crate::redis_store::RedisStore;
 
-// ── KvStore ──────────────────────────────────────────────────
-// The central state of a node.
-// DashMap is a concurrent HashMap — safe to share across
-// async tasks without wrapping in a Mutex.
 pub struct KvStore {
-    data: DashMap<Key, Entry>,
-    wal: Wal,
+    redis: RedisStore,
     node_id: NodeId,
-    node_index: usize,   // this node's slot in the vector clock
-    num_nodes: usize,    // total nodes in cluster (3)
-    snapshot_path: PathBuf,
-    write_count: std::sync::atomic::AtomicU64,
-    snapshot_interval: u64, // take snapshot every N writes
+    node_index: usize,
+    num_nodes: usize,
 }
 
 impl KvStore {
-    // ── Boot up ──────────────────────────────────────────────
-    // Creates a new store, replays the WAL if one exists,
-    // and loads the latest snapshot if one exists.
-    pub fn new(
+    pub async fn new(
         node_id: NodeId,
         node_index: usize,
         num_nodes: usize,
-        wal_path: PathBuf,
-        snapshot_path: PathBuf,
-    ) -> std::io::Result<Self> {
-        let data = DashMap::new();
-
-        // load snapshot first if it exists
-        if let Some(entries) = Snapshot::load(&snapshot_path)? {
-            for (key, entry) in entries {
-                data.insert(key, entry);
-            }
-        }
-
-        // then replay WAL on top of snapshot
-        let wal_ops = Wal::replay(&wal_path)?;
-        for op in wal_ops {
-            match op {
-                WalOp::Set(entry) => { data.insert(entry.key.clone(), entry); }
-                WalOp::Delete(key) => { data.remove(&key); }
-            }
-        }
-
-        let wal = Wal::open(wal_path)?;
-
+        redis_url: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let redis = RedisStore::new(redis_url)?;
         Ok(Self {
-            data,
-            wal,
+            redis,
             node_id,
             node_index,
             num_nodes,
-            snapshot_path,
-            write_count: std::sync::atomic::AtomicU64::new(0),
-            snapshot_interval: 100, // snapshot every 100 writes
         })
     }
 
     // ── Get ──────────────────────────────────────────────────
-    pub fn get(&self, key: &str) -> Option<Entry> {
-        self.data.get(key).map(|e| e.clone())
+    pub async fn get(&self, key: &str) -> Option<Entry> {
+        self.redis.get(key).await.unwrap_or(None)
     }
 
     // ── Set ──────────────────────────────────────────────────
-    // The full write path:
-    // 1. Build the entry with an incremented vector clock
-    // 2. Append to WAL
-    // 3. Apply to in-memory store
-    // 4. Maybe take a snapshot
-    pub fn set(&mut self, key: Key, value_str: String) -> std::io::Result<()> {
-        // get or create the current clock for this key
-        let mut clock = self.data
+    pub async fn set(
+        &self,
+        key: Key,
+        value_str: String,
+        source: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // get current clock for this key or create fresh one
+        let mut clock = self.redis
             .get(&key)
-            .map(|e| e.clock.clone())
+            .await?
+            .map(|e| e.clock)
             .unwrap_or_else(|| vector_clock::new_clock(self.num_nodes));
 
         // increment this node's slot
@@ -92,71 +56,50 @@ impl KvStore {
             crdt_type: shared::types::CrdtType::LwwRegister,
             clock,
             node_id: self.node_id.clone(),
+            source,
         };
 
-        // WAL first — disk before memory
-        self.wal.append(&WalOp::Set(entry.clone()))?;
+        // write atomically to Redis
+        self.redis.set_atomic(&entry).await?;
 
-        // then memory
-        self.data.insert(key, entry);
-
-        // check if we should snapshot
-        self.maybe_snapshot()?;
+        // publish to other nodes via Pub/Sub
+        self.redis.publish(&entry).await?;
 
         Ok(())
     }
 
     // ── Delete ───────────────────────────────────────────────
-    pub fn delete(&mut self, key: &str) -> std::io::Result<()> {
-        self.wal.append(&WalOp::Delete(key.to_string()))?;
-        self.data.remove(key);
-        self.maybe_snapshot()?;
+    pub async fn delete(
+        &self,
+        key: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.redis.delete(key).await?;
         Ok(())
     }
 
-    // ── Apply gossip entry ───────────────────────────────────
-    // Called by the gossip handler when a peer sends us an entry.
-    // We merge it with our local version using CRDT logic.
-    pub fn apply_gossip(&mut self, incoming: Entry) -> std::io::Result<()> {
+    // ── Apply gossip ─────────────────────────────────────────
+    // Called by pubsub when another node publishes an update.
+    // Runs CRDT merge and writes result back to Redis.
+    pub async fn apply_gossip(
+        &self,
+        incoming: Entry,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let key = incoming.key.clone();
 
-        let merged = if let Some(local) = self.data.get(&key) {
-            crdt::merge_entries(&local.clone(), &incoming)
+        let merged = if let Some(local) = self.redis.get(&key).await? {
+            crdt::merge_entries(&local, &incoming)
         } else {
-            // we don't have this key at all — just take incoming
             incoming
         };
 
-        self.wal.append(&WalOp::Set(merged.clone()))?;
-        self.data.insert(key, merged);
-
+        self.redis.set_atomic(&merged).await?;
         Ok(())
     }
 
-    // ── All entries ──────────────────────────────────────────
-    // Used by gossip to get everything this node knows about
-    // so it can send a digest to peers.
-    pub fn all_entries(&self) -> Vec<Entry> {
-        self.data.iter().map(|e| e.clone()).collect()
-    }
-
-    // ── Maybe snapshot ───────────────────────────────────────
-    // Every N writes, serialize the full store to disk
-    // and truncate the WAL.
-    fn maybe_snapshot(&mut self) -> std::io::Result<()> {
-        let count = self.write_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-        if count % self.snapshot_interval == 0 && count > 0 {
-            let entries: HashMap<Key, Entry> = self.data
-                .iter()
-                .map(|e| (e.key().clone(), e.value().clone()))
-                .collect();
-
-            Snapshot::save(&self.snapshot_path, &entries)?;
-            self.wal.truncate()?;
-        }
-
-        Ok(())
+    // ── All entries ───────────────────────────────────────────
+    pub async fn all_entries(
+        &self,
+    ) -> Result<Vec<Entry>, Box<dyn std::error::Error>> {
+        self.redis.all_entries().await
     }
 }

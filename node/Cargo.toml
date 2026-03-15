@@ -22,3 +22,18 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 shared = { path = "../shared" }
 kvstore-proto = { path = "../proto" }
 
+
+# Redis client
+redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
+
+# Connection pooling
+deadpool-redis = "0.15"
+
+# Metrics
+prometheus = "0.13"
+
+# HTTP server for /metrics endpoint
+axum = "0.7"
+futures-util = "0.3"
+
+
